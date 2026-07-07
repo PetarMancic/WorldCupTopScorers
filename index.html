@@ -1,0 +1,427 @@
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>World Cup 2026 — Top Scorers</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #262e38;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #3fb950;
+    --gold: #ffd54a;
+    --silver: #c9d1d9;
+    --bronze: #d99a5f;
+    --error: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: radial-gradient(circle at top, #131922 0%, var(--bg) 55%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 32px 16px 64px;
+  }
+  .app {
+    width: 100%;
+    max-width: 640px;
+  }
+  header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 8px;
+  }
+  h1 {
+    font-size: 1.5rem;
+    margin: 0 0 4px;
+    letter-spacing: -0.02em;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin: 0;
+  }
+  button#refreshBtn {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  button#refreshBtn:hover:not(:disabled) {
+    background: #1c232c;
+    border-color: #38424e;
+  }
+  button#refreshBtn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .meta-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+    font-size: 0.78rem;
+    margin: 14px 0 20px;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+  }
+  .dot.live { background: var(--accent); box-shadow: 0 0 0 3px rgba(63,185,80,0.18); }
+  .dot.error { background: var(--error); }
+  .banner {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 0.88rem;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+  .banner.error { border-color: rgba(248,81,73,0.4); color: #ffb3ae; }
+  .list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+  }
+  .row.top1 { border-color: rgba(255,213,74,0.5); background: linear-gradient(90deg, rgba(255,213,74,0.08), var(--panel) 40%); }
+  .row.top2 { border-color: rgba(201,209,217,0.35); background: linear-gradient(90deg, rgba(201,209,217,0.07), var(--panel) 40%); }
+  .row.top3 { border-color: rgba(217,154,95,0.4); background: linear-gradient(90deg, rgba(217,154,95,0.08), var(--panel) 40%); }
+  .rank {
+    width: 26px;
+    text-align: center;
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .top1 .rank { color: var(--gold); }
+  .top2 .rank { color: var(--silver); }
+  .top3 .rank { color: var(--bronze); }
+  .photo {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: #1c232c;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .avatar-fallback {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: #1c232c;
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .info { flex: 1; min-width: 0; }
+  .player-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .team-name {
+    color: var(--muted);
+    font-size: 0.78rem;
+  }
+  .goals {
+    font-size: 1.15rem;
+    font-weight: 700;
+    min-width: 28px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  footer {
+    margin-top: 32px;
+    text-align: center;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  footer a { color: var(--muted); }
+  .tabs {
+    display: flex;
+    gap: 6px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px;
+    margin-bottom: 16px;
+  }
+  .tab {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    padding: 8px 10px;
+    border-radius: 7px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tab.active {
+    background: #1f2733;
+    color: var(--text);
+  }
+  @media (max-width: 480px) {
+    body { padding: 20px 12px 48px; }
+    header { flex-wrap: wrap; }
+    h1 { font-size: 1.2rem; }
+    button#refreshBtn { padding: 7px 12px; font-size: 0.8rem; }
+    .row { padding: 8px 10px; gap: 10px; }
+    .photo, .avatar-fallback { width: 36px; height: 36px; }
+    .player-name { font-size: 0.88rem; }
+    .goals { font-size: 1rem; }
+  }
+</style>
+
+<div class="app">
+  <header>
+    <div>
+      <h1>2026 FIFA World Cup — Top Scorers</h1>
+      <p class="subtitle">Live goal-scorer rankings, updated automatically</p>
+    </div>
+    <button id="refreshBtn">Refresh now</button>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" id="tabTournament">This Tournament</button>
+    <button class="tab" id="tabAllTime">All-Time</button>
+  </div>
+
+  <div class="meta-row">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">Loading…</span>
+  </div>
+
+  <div id="banner" class="banner" style="display:none;"></div>
+  <div id="list" class="list"></div>
+
+  <footer>
+    Data via ESPN
+  </footer>
+</div>
+
+<script>
+(function () {
+  // Unofficial ESPN endpoint (no key, no documented ToS/rate limit) — could
+  // change or disappear without notice, but it's the only free source that
+  // returns a complete, accurate, pre-aggregated leaderboard.
+  const STATS_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/statistics";
+  const POLL_MS = 60000;
+
+  // Career World Cup goals through the end of the 2022 tournament (static —
+  // this is historical record, not live data). Combined at render time with
+  // each player's live 2026 goal count to produce the "All-Time" ranking.
+  const ALL_TIME_BASELINE = [
+    { name: "Miroslav Klose", team: "Germany", goals: 16 },
+    { name: "Ronaldo", team: "Brazil", goals: 15 },
+    { name: "Gerd Müller", team: "West Germany", goals: 14 },
+    { name: "Lionel Messi", team: "Argentina", goals: 13 },
+    { name: "Just Fontaine", team: "France", goals: 13 },
+    { name: "Kylian Mbappé", team: "France", goals: 12 },
+    { name: "Pelé", team: "Brazil", goals: 12 },
+    { name: "Sándor Kocsis", team: "Hungary", goals: 11 },
+    { name: "Jürgen Klinsmann", team: "Germany", goals: 11 },
+    { name: "Helmut Rahn", team: "West Germany", goals: 10 },
+    { name: "Gary Lineker", team: "England", goals: 10 },
+    { name: "Gabriel Batistuta", team: "Argentina", goals: 10 },
+    { name: "Thomas Müller", team: "Germany", goals: 10 },
+    { name: "Grzegorz Lato", team: "Poland", goals: 10 },
+    { name: "Teófilo Cubillas", team: "Peru", goals: 10 },
+    { name: "Eusébio", team: "Portugal", goals: 9 },
+    { name: "Diego Maradona", team: "Argentina", goals: 8 },
+    { name: "Cristiano Ronaldo", team: "Portugal", goals: 8 },
+    { name: "Harry Kane", team: "England", goals: 8 },
+  ];
+
+  const refreshBtn = document.getElementById("refreshBtn");
+  const tabTournamentBtn = document.getElementById("tabTournament");
+  const tabAllTimeBtn = document.getElementById("tabAllTime");
+  const statusDot = document.getElementById("statusDot");
+  const statusText = document.getElementById("statusText");
+  const banner = document.getElementById("banner");
+  const listEl = document.getElementById("list");
+
+  let tournamentScorers = [];
+  let activeTab = "tournament";
+  let inFlight = false;
+
+  async function fetchJSON(url) {
+    let res;
+    try {
+      res = await fetch(url);
+    } catch {
+      throw new Error("Network error — check your connection.");
+    }
+    if (res.status === 429) throw new Error("Rate limited by the API — try again shortly.");
+    if (!res.ok) throw new Error("API error (HTTP " + res.status + ").");
+    try {
+      return await res.json();
+    } catch {
+      throw new Error("Received an unexpected response from the API.");
+    }
+  }
+
+  function setStatus(mode, text) {
+    statusDot.className = "dot" + (mode === "live" ? " live" : mode === "error" ? " error" : "");
+    statusText.textContent = text;
+  }
+
+  function showBanner(kind, message) {
+    if (!message) {
+      banner.style.display = "none";
+      return;
+    }
+    banner.style.display = "block";
+    banner.className = "banner" + (kind === "error" ? " error" : "");
+    banner.textContent = message;
+  }
+
+  function initials(name) {
+    return name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((p) => p[0].toUpperCase())
+      .join("");
+  }
+
+  function allTimeScorers() {
+    const combined = new Map();
+    for (const p of ALL_TIME_BASELINE) {
+      combined.set(p.name, { name: p.name, team: p.team, photo: "", goals: p.goals });
+    }
+    for (const s of tournamentScorers) {
+      const existing = combined.get(s.name);
+      if (existing) {
+        existing.goals += s.goals;
+        existing.photo = s.photo || existing.photo;
+        existing.team = s.team || existing.team;
+      } else {
+        combined.set(s.name, { ...s });
+      }
+    }
+    return Array.from(combined.values()).sort((a, b) => b.goals - a.goals);
+  }
+
+  function render() {
+    const scorers = activeTab === "alltime" ? allTimeScorers() : tournamentScorers;
+    if (scorers.length === 0) {
+      listEl.innerHTML = "";
+      showBanner("info", "No goals scored yet — check back once the tournament kicks off.");
+      return;
+    }
+    showBanner(null);
+    listEl.innerHTML = scorers
+      .slice(0, 20)
+      .map((s, i) => {
+        const rank = i + 1;
+        const topClass = rank <= 3 ? " top" + rank : "";
+        const photo = s.photo
+          ? `<img class="photo" src="${s.photo}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'avatar-fallback',textContent:'${initials(s.name)}'}))">`
+          : `<div class="avatar-fallback">${initials(s.name)}</div>`;
+        return `
+          <div class="row${topClass}">
+            <div class="rank">${rank}</div>
+            ${photo}
+            <div class="info">
+              <div class="player-name">${escapeHtml(s.name)}</div>
+              <div class="team-name">${escapeHtml(s.team)}</div>
+            </div>
+            <div class="goals">${s.goals}</div>
+          </div>`;
+      })
+      .join("");
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  async function loadTopScorers({ isFirstLoad } = {}) {
+    if (inFlight) return;
+    inFlight = true;
+    refreshBtn.disabled = true;
+    if (isFirstLoad) setStatus("loading", "Loading…");
+    else setStatus("loading", "Refreshing…");
+
+    try {
+      const data = await fetchJSON(STATS_URL);
+      const stats = Array.isArray(data.stats) ? data.stats : [];
+      const goalsLeaders = stats.find((s) => s.name === "goalsLeaders");
+      const leaders = goalsLeaders && Array.isArray(goalsLeaders.leaders)
+        ? goalsLeaders.leaders
+        : [];
+
+      tournamentScorers = leaders
+        .map((l) => ({
+          name: l.athlete && l.athlete.displayName || "",
+          team: l.athlete && l.athlete.team && l.athlete.team.name || "",
+          photo: l.athlete && l.athlete.headshot && l.athlete.headshot.href || "",
+          goals: l.value,
+        }))
+        .filter((s) => s.name)
+        .sort((a, b) => b.goals - a.goals);
+
+      render();
+      setStatus("live", "Live · last updated " + new Date().toLocaleTimeString());
+      showBanner(null);
+    } catch (err) {
+      setStatus("error", "Update failed");
+      showBanner("error", err.message || "Something went wrong while fetching data.");
+    } finally {
+      inFlight = false;
+      refreshBtn.disabled = false;
+    }
+  }
+
+  function setActiveTab(tab) {
+    if (activeTab === tab) return;
+    activeTab = tab;
+    tabTournamentBtn.classList.toggle("active", tab === "tournament");
+    tabAllTimeBtn.classList.toggle("active", tab === "alltime");
+    render();
+  }
+
+  tabTournamentBtn.addEventListener("click", () => setActiveTab("tournament"));
+  tabAllTimeBtn.addEventListener("click", () => setActiveTab("alltime"));
+
+  refreshBtn.addEventListener("click", () => loadTopScorers({ isFirstLoad: false }));
+  loadTopScorers({ isFirstLoad: true });
+  setInterval(() => loadTopScorers({ isFirstLoad: false }), POLL_MS);
+})();
+</script>
