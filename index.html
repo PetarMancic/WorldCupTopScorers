@@ -229,7 +229,7 @@
   <div id="list" class="list"></div>
 
   <footer>
-    Data via ESPN
+    Tournament data via ESPN · All-time data via Wikipedia
   </footer>
 </div>
 
@@ -239,32 +239,12 @@
   // change or disappear without notice, but it's the only free source that
   // returns a complete, accurate, pre-aggregated leaderboard.
   const STATS_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/statistics";
+  // MediaWiki's action API supports anonymous CORS via origin=* — no key needed.
+  // Section 1 of this article is exactly the "Overall top goalscorers" table,
+  // which Wikipedia editors keep updated for active players (including the
+  // current tournament), so nothing about who's active/retired is hardcoded.
+  const WIKI_URL = "https://en.wikipedia.org/w/api.php?action=parse&page=List_of_FIFA_World_Cup_top_goalscorers&format=json&formatversion=2&prop=text&section=1&origin=*";
   const POLL_MS = 60000;
-
-  // Career World Cup goals through the end of the 2022 tournament (static —
-  // this is historical record, not live data). Combined at render time with
-  // each player's live 2026 goal count to produce the "All-Time" ranking.
-  const ALL_TIME_BASELINE = [
-    { name: "Miroslav Klose", team: "Germany", goals: 16 },
-    { name: "Ronaldo", team: "Brazil", goals: 15 },
-    { name: "Gerd Müller", team: "West Germany", goals: 14 },
-    { name: "Lionel Messi", team: "Argentina", goals: 13 },
-    { name: "Just Fontaine", team: "France", goals: 13 },
-    { name: "Kylian Mbappé", team: "France", goals: 12 },
-    { name: "Pelé", team: "Brazil", goals: 12 },
-    { name: "Sándor Kocsis", team: "Hungary", goals: 11 },
-    { name: "Jürgen Klinsmann", team: "Germany", goals: 11 },
-    { name: "Helmut Rahn", team: "West Germany", goals: 10 },
-    { name: "Gary Lineker", team: "England", goals: 10 },
-    { name: "Gabriel Batistuta", team: "Argentina", goals: 10 },
-    { name: "Thomas Müller", team: "Germany", goals: 10 },
-    { name: "Grzegorz Lato", team: "Poland", goals: 10 },
-    { name: "Teófilo Cubillas", team: "Peru", goals: 10 },
-    { name: "Eusébio", team: "Portugal", goals: 9 },
-    { name: "Diego Maradona", team: "Argentina", goals: 8 },
-    { name: "Cristiano Ronaldo", team: "Portugal", goals: 8 },
-    { name: "Harry Kane", team: "England", goals: 8 },
-  ];
 
   const refreshBtn = document.getElementById("refreshBtn");
   const tabTournamentBtn = document.getElementById("tabTournament");
@@ -275,6 +255,8 @@
   const listEl = document.getElementById("list");
 
   let tournamentScorers = [];
+  let allTimeScorers = [];
+  let allTimeLoaded = false;
   let activeTab = "tournament";
   let inFlight = false;
 
@@ -318,29 +300,74 @@
       .join("");
   }
 
-  function allTimeScorers() {
-    const combined = new Map();
-    for (const p of ALL_TIME_BASELINE) {
-      combined.set(p.name, { name: p.name, team: p.team, photo: "", goals: p.goals });
-    }
-    for (const s of tournamentScorers) {
-      const existing = combined.get(s.name);
-      if (existing) {
-        existing.goals += s.goals;
-        existing.photo = s.photo || existing.photo;
-        existing.team = s.team || existing.team;
+  // Parses the "Overall top goalscorers" wikitable out of Wikipedia's
+  // rendered HTML. Rows for players tied on rank (e.g. sharing a rank via
+  // rowspan) omit the rank/goals cells, so those are carried forward from
+  // the previous row that had them.
+  function parseAllTimeTable(doc) {
+    const table = doc.querySelector("table.wikitable.sortable");
+    if (!table) return [];
+    const list = [];
+    let lastGoals = 0;
+    for (const row of table.rows) {
+      const cells = Array.from(row.children);
+      if (!cells.length) continue;
+      if (cells[0].tagName === "TH" && cells[0].getAttribute("scope") === "col") continue; // header row
+      const goalsThIdx = cells.findIndex((c) => c.tagName === "TH");
+      let idx, goals;
+      if (goalsThIdx !== -1) {
+        goals = parseInt(cells[goalsThIdx].textContent.trim(), 10) || 0;
+        idx = 1; // cells[0] is rank
       } else {
-        combined.set(s.name, { ...s });
+        goals = lastGoals; // continuation row, rank+goals inherited
+        idx = 0;
       }
+      lastGoals = goals;
+
+      const playerCell = cells[idx];
+      const teamCell = cells[idx + 1];
+      if (!playerCell || !teamCell) continue;
+      const nameLink = playerCell.querySelector("a");
+      const name = (nameLink ? nameLink.textContent : playerCell.textContent).trim();
+      const teamLinks = teamCell.querySelectorAll("a");
+      const team = (teamLinks.length ? teamLinks[teamLinks.length - 1].textContent : teamCell.textContent).trim();
+      if (name) list.push({ name, team, goals, photo: "" });
     }
-    return Array.from(combined.values()).sort((a, b) => b.goals - a.goals);
+    return list;
+  }
+
+  async function loadAllTime() {
+    if (inFlight) return;
+    inFlight = true;
+    refreshBtn.disabled = true;
+    setStatus("loading", allTimeLoaded ? "Refreshing…" : "Loading…");
+
+    try {
+      const data = await fetchJSON(WIKI_URL);
+      const html = data.parse && data.parse.text;
+      const doc = new DOMParser().parseFromString(html || "", "text/html");
+      allTimeScorers = parseAllTimeTable(doc);
+      allTimeLoaded = true;
+      render();
+      setStatus("live", "Live · last updated " + new Date().toLocaleTimeString());
+      showBanner(null);
+    } catch (err) {
+      setStatus("error", "Update failed");
+      showBanner("error", err.message || "Could not load the all-time list.");
+    } finally {
+      inFlight = false;
+      refreshBtn.disabled = false;
+    }
   }
 
   function render() {
-    const scorers = activeTab === "alltime" ? allTimeScorers() : tournamentScorers;
+    const scorers = activeTab === "alltime" ? allTimeScorers : tournamentScorers;
     if (scorers.length === 0) {
       listEl.innerHTML = "";
-      showBanner("info", "No goals scored yet — check back once the tournament kicks off.");
+      const emptyMsg = activeTab === "alltime"
+        ? "Couldn't load the all-time list — try refreshing."
+        : "No goals scored yet — check back once the tournament kicks off.";
+      showBanner("info", emptyMsg);
       return;
     }
     showBanner(null);
@@ -414,14 +441,23 @@
     activeTab = tab;
     tabTournamentBtn.classList.toggle("active", tab === "tournament");
     tabAllTimeBtn.classList.toggle("active", tab === "alltime");
-    render();
+    if (tab === "alltime" && !allTimeLoaded) {
+      loadAllTime();
+    } else {
+      render();
+    }
   }
 
   tabTournamentBtn.addEventListener("click", () => setActiveTab("tournament"));
   tabAllTimeBtn.addEventListener("click", () => setActiveTab("alltime"));
 
-  refreshBtn.addEventListener("click", () => loadTopScorers({ isFirstLoad: false }));
+  refreshBtn.addEventListener("click", () => {
+    if (activeTab === "alltime") loadAllTime();
+    else loadTopScorers({ isFirstLoad: false });
+  });
   loadTopScorers({ isFirstLoad: true });
-  setInterval(() => loadTopScorers({ isFirstLoad: false }), POLL_MS);
+  setInterval(() => {
+    if (activeTab === "tournament") loadTopScorers({ isFirstLoad: false });
+  }, POLL_MS);
 })();
 </script>
