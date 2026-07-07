@@ -194,6 +194,21 @@
     background: #1f2733;
     color: var(--text);
   }
+  .subtabs {
+    max-width: 220px;
+    padding: 3px;
+    margin-bottom: 10px;
+  }
+  .subtabs .tab {
+    padding: 6px 8px;
+    font-size: 0.76rem;
+  }
+  .assist-note {
+    color: var(--muted);
+    font-size: 0.76rem;
+    margin: -2px 0 12px;
+    line-height: 1.4;
+  }
   @media (max-width: 480px) {
     body { padding: 20px 12px 48px; }
     header { flex-wrap: wrap; }
@@ -219,6 +234,15 @@
     <button class="tab active" id="tabTournament">This Tournament</button>
     <button class="tab" id="tabAllTime">All-Time</button>
   </div>
+
+  <div class="tabs subtabs" id="metricToggle">
+    <button class="tab active" id="metricGoals">Goals</button>
+    <button class="tab" id="metricAssists">Assists</button>
+  </div>
+
+  <p class="assist-note" id="assistNote" style="display:none;">
+    Approximate — only counts assists from players who've also scored this tournament (ESPN has no standalone assists leaderboard).
+  </p>
 
   <div class="meta-row">
     <span class="dot" id="statusDot"></span>
@@ -254,6 +278,10 @@
   const refreshBtn = document.getElementById("refreshBtn");
   const tabTournamentBtn = document.getElementById("tabTournament");
   const tabAllTimeBtn = document.getElementById("tabAllTime");
+  const metricToggle = document.getElementById("metricToggle");
+  const metricGoalsBtn = document.getElementById("metricGoals");
+  const metricAssistsBtn = document.getElementById("metricAssists");
+  const assistNote = document.getElementById("assistNote");
   const statusDot = document.getElementById("statusDot");
   const statusText = document.getElementById("statusText");
   const banner = document.getElementById("banner");
@@ -263,6 +291,7 @@
   let allTimeScorers = [];
   let allTimeLoaded = false;
   let activeTab = "tournament";
+  let metricMode = "goals"; // "goals" | "assists" — assists only applies to the tournament tab
   let inFlight = false;
 
   async function fetchJSON(url) {
@@ -421,24 +450,33 @@
   }
 
   function render() {
-    const scorers = activeTab === "alltime" ? allTimeScorers : tournamentScorers;
+    const isAssists = activeTab === "tournament" && metricMode === "assists";
+    const pool = activeTab === "alltime" ? allTimeScorers : tournamentScorers;
+    const scorers = isAssists
+      ? [...pool].sort((a, b) => (b.assists || 0) - (a.assists || 0)).slice(0, 20)
+      : pool.slice(0, 20);
+
+    assistNote.style.display = isAssists && scorers.length > 0 ? "block" : "none";
+
     if (scorers.length === 0) {
       listEl.innerHTML = "";
       const emptyMsg = activeTab === "alltime"
         ? "Couldn't load the all-time list — try refreshing."
-        : "No goals scored yet — check back once the tournament kicks off.";
+        : isAssists
+          ? "No assists recorded yet — check back once the tournament kicks off."
+          : "No goals scored yet — check back once the tournament kicks off.";
       showBanner("info", emptyMsg);
       return;
     }
     showBanner(null);
     listEl.innerHTML = scorers
-      .slice(0, 20)
       .map((s, i) => {
         const rank = i + 1;
         const topClass = rank <= 3 ? " top" + rank : "";
         const photo = s.photo
           ? `<img class="photo" src="${s.photo}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'avatar-fallback',textContent:'${initials(s.name)}'}))">`
           : `<div class="avatar-fallback">${initials(s.name)}</div>`;
+        const metricValue = isAssists ? (s.assists || 0) : s.goals;
         return `
           <div class="row${topClass}">
             <div class="rank">${rank}</div>
@@ -447,7 +485,7 @@
               <div class="player-name">${escapeHtml(s.name)}</div>
               <div class="team-name">${escapeHtml(s.team)}</div>
             </div>
-            <div class="goals">${s.goals}</div>
+            <div class="goals">${metricValue}</div>
           </div>`;
       })
       .join("");
@@ -477,17 +515,23 @@
       tournamentScorers = leaders
         .map((l) => {
           const name = l.athlete && l.athlete.displayName || "";
+          const playerStats = (l.athlete && l.athlete.statistics) || [];
+          const assistsStat = playerStats.find((st) => st.name === "goalAssists");
           return {
             name,
             wikiTitle: name,
             team: l.athlete && l.athlete.team && l.athlete.team.name || "",
             photo: l.athlete && l.athlete.headshot && l.athlete.headshot.href || "",
             goals: l.value,
+            assists: assistsStat ? assistsStat.value : 0,
           };
         })
         .filter((s) => s.name)
         .sort((a, b) => b.goals - a.goals)
-        .slice(0, 20); // only the top 20 are ever rendered
+        // Keep a wider pool than the top 20 shown by goals — the assists
+        // view re-sorts this same pool, so it needs more than 20 candidates
+        // to be a reasonable (if still approximate) assists ranking.
+        .slice(0, 50);
 
       await ensureThumbnails(tournamentScorers);
       render();
@@ -507,6 +551,7 @@
     activeTab = tab;
     tabTournamentBtn.classList.toggle("active", tab === "tournament");
     tabAllTimeBtn.classList.toggle("active", tab === "alltime");
+    metricToggle.style.display = tab === "tournament" ? "flex" : "none";
     if (tab === "alltime" && !allTimeLoaded) {
       loadAllTime();
     } else {
@@ -514,8 +559,18 @@
     }
   }
 
+  function setMetricMode(mode) {
+    if (metricMode === mode) return;
+    metricMode = mode;
+    metricGoalsBtn.classList.toggle("active", mode === "goals");
+    metricAssistsBtn.classList.toggle("active", mode === "assists");
+    render();
+  }
+
   tabTournamentBtn.addEventListener("click", () => setActiveTab("tournament"));
   tabAllTimeBtn.addEventListener("click", () => setActiveTab("alltime"));
+  metricGoalsBtn.addEventListener("click", () => setMetricMode("goals"));
+  metricAssistsBtn.addEventListener("click", () => setMetricMode("assists"));
 
   refreshBtn.addEventListener("click", () => {
     if (activeTab === "alltime") loadAllTime();
