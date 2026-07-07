@@ -244,7 +244,12 @@
   // which Wikipedia editors keep updated for active players (including the
   // current tournament), so nothing about who's active/retired is hardcoded.
   const WIKI_URL = "https://en.wikipedia.org/w/api.php?action=parse&page=List_of_FIFA_World_Cup_top_goalscorers&format=json&formatversion=2&prop=text&section=1&origin=*";
+  const WIKI_API = "https://en.wikipedia.org/w/api.php";
   const POLL_MS = 60000;
+
+  // name/wikiTitle -> thumbnail URL ("" means looked up, no image found).
+  // Persisted for the page session so repeat polls don't re-fetch photos.
+  const thumbnailCache = new Map();
 
   const refreshBtn = document.getElementById("refreshBtn");
   const tabTournamentBtn = document.getElementById("tabTournament");
@@ -273,6 +278,59 @@
       return await res.json();
     } catch {
       throw new Error("Received an unexpected response from the API.");
+    }
+  }
+
+  // Batched lookup of Wikipedia infobox photos for a list of page titles —
+  // works for any notable footballer, active or retired, so no image needs
+  // to be hardcoded or sourced per-player.
+  async function fetchWikiThumbnails(titles) {
+    if (!titles.length) return {};
+    const params = new URLSearchParams({
+      action: "query",
+      prop: "pageimages",
+      piprop: "thumbnail",
+      pithumbsize: "120",
+      titles: titles.join("|"),
+      redirects: "1",
+      format: "json",
+      formatversion: "2",
+      origin: "*",
+    });
+    const map = {};
+    try {
+      const data = await fetchJSON(`${WIKI_API}?${params.toString()}`);
+      const query = data.query || {};
+      const pages = query.pages || [];
+      const redirectFrom = {};
+      if (Array.isArray(query.redirects)) {
+        for (const r of query.redirects) redirectFrom[r.to] = r.from;
+      }
+      for (const page of pages) {
+        const url = page.thumbnail && page.thumbnail.source;
+        if (!url) continue;
+        map[page.title] = url;
+        const original = redirectFrom[page.title];
+        if (original) map[original] = url;
+      }
+    } catch {
+      /* photo lookup failing shouldn't block showing scores — fall through to initials */
+    }
+    return map;
+  }
+
+  async function ensureThumbnails(items) {
+    const missing = [...new Set(
+      items.filter((it) => !it.photo && !thumbnailCache.has(it.wikiTitle)).map((it) => it.wikiTitle)
+    )];
+    // MediaWiki caps anonymous batched title lookups at 50 per request.
+    for (let i = 0; i < missing.length; i += 50) {
+      const batch = missing.slice(i, i + 50);
+      const fetched = await fetchWikiThumbnails(batch);
+      for (const title of batch) thumbnailCache.set(title, fetched[title] || "");
+    }
+    for (const it of items) {
+      if (!it.photo) it.photo = thumbnailCache.get(it.wikiTitle) || "";
     }
   }
 
@@ -329,11 +387,12 @@
       if (!playerCell || !teamCell) continue;
       const nameLink = playerCell.querySelector("a");
       const name = (nameLink ? nameLink.textContent : playerCell.textContent).trim();
+      const wikiTitle = (nameLink && nameLink.getAttribute("title")) || name;
       const teamLinks = teamCell.querySelectorAll("a");
       const team = (teamLinks.length ? teamLinks[teamLinks.length - 1].textContent : teamCell.textContent).trim();
-      if (name) list.push({ name, team, goals, photo: "" });
+      if (name) list.push({ name, team, goals, photo: "", wikiTitle });
     }
-    return list;
+    return list.slice(0, 20); // only the top 20 are ever rendered
   }
 
   async function loadAllTime() {
@@ -348,6 +407,7 @@
       const doc = new DOMParser().parseFromString(html || "", "text/html");
       allTimeScorers = parseAllTimeTable(doc);
       allTimeLoaded = true;
+      await ensureThumbnails(allTimeScorers);
       render();
       setStatus("live", "Live · last updated " + new Date().toLocaleTimeString());
       showBanner(null);
@@ -415,15 +475,21 @@
         : [];
 
       tournamentScorers = leaders
-        .map((l) => ({
-          name: l.athlete && l.athlete.displayName || "",
-          team: l.athlete && l.athlete.team && l.athlete.team.name || "",
-          photo: l.athlete && l.athlete.headshot && l.athlete.headshot.href || "",
-          goals: l.value,
-        }))
+        .map((l) => {
+          const name = l.athlete && l.athlete.displayName || "";
+          return {
+            name,
+            wikiTitle: name,
+            team: l.athlete && l.athlete.team && l.athlete.team.name || "",
+            photo: l.athlete && l.athlete.headshot && l.athlete.headshot.href || "",
+            goals: l.value,
+          };
+        })
         .filter((s) => s.name)
-        .sort((a, b) => b.goals - a.goals);
+        .sort((a, b) => b.goals - a.goals)
+        .slice(0, 20); // only the top 20 are ever rendered
 
+      await ensureThumbnails(tournamentScorers);
       render();
       setStatus("live", "Live · last updated " + new Date().toLocaleTimeString());
       showBanner(null);
