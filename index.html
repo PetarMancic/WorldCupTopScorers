@@ -203,12 +203,6 @@
     padding: 6px 8px;
     font-size: 0.76rem;
   }
-  .assist-note {
-    color: var(--muted);
-    font-size: 0.76rem;
-    margin: -2px 0 12px;
-    line-height: 1.4;
-  }
   @media (max-width: 480px) {
     body { padding: 20px 12px 48px; }
     header { flex-wrap: wrap; }
@@ -240,10 +234,6 @@
     <button class="tab" id="metricAssists">Assists</button>
   </div>
 
-  <p class="assist-note" id="assistNote" style="display:none;">
-    Approximate — only counts assists from players who've also scored this tournament (ESPN has no standalone assists leaderboard).
-  </p>
-
   <div class="meta-row">
     <span class="dot" id="statusDot"></span>
     <span id="statusText">Loading…</span>
@@ -253,16 +243,22 @@
   <div id="list" class="list"></div>
 
   <footer>
-    Tournament data via ESPN · All-time data via Wikipedia
+    Tournament data via Fotmob · All-time data via Wikipedia
   </footer>
 </div>
 
 <script>
 (function () {
-  // Unofficial ESPN endpoint (no key, no documented ToS/rate limit) — could
-  // change or disappear without notice, but it's the only free source that
-  // returns a complete, accurate, pre-aggregated leaderboard.
-  const STATS_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/statistics";
+  // Unofficial Fotmob endpoints (no key, no documented ToS/rate limit) —
+  // could change or disappear without notice, but unlike ESPN's aggregate
+  // stats, this reflects finished matches immediately (verified: matches
+  // ESPN's own boxscore for a goal scored hours earlier) and gives a real,
+  // complete assists leaderboard — including players with zero goals, who
+  // never showed up in our old goal-scorer-derived assists approximation.
+  // id=77 is the World Cup, season=24254 is 2026.
+  const FOTMOB_GOALS_URL = "https://www.fotmob.com/api/data/leagueseasondeepstats?id=77&season=24254&type=players&stat=goals";
+  const FOTMOB_ASSISTS_URL = "https://www.fotmob.com/api/data/leagueseasondeepstats?id=77&season=24254&type=players&stat=goal_assist";
+  const FOTMOB_LEAGUE_URL = "https://www.fotmob.com/api/data/leagues?id=77&season=24254";
   // MediaWiki's action API supports anonymous CORS via origin=* — no key needed.
   // Section 1 of this article is exactly the "Overall top goalscorers" table,
   // which Wikipedia editors keep updated for active players (including the
@@ -270,10 +266,50 @@
   const WIKI_URL = "https://en.wikipedia.org/w/api.php?action=parse&page=List_of_FIFA_World_Cup_top_goalscorers&format=json&formatversion=2&prop=text&section=1&origin=*";
   const WIKI_API = "https://en.wikipedia.org/w/api.php";
   const POLL_MS = 60000;
+  const TEAM_MAP_CACHE_KEY = "wc2026_fotmob_teams_v1";
 
   // name/wikiTitle -> thumbnail URL ("" means looked up, no image found).
   // Persisted for the page session so repeat polls don't re-fetch photos.
   const thumbnailCache = new Map();
+
+  // Fotmob team id -> country name. The squad list is fixed for the whole
+  // tournament, so this is cached forever once fetched.
+  let teamMap = null;
+  function loadTeamMapCache() {
+    try {
+      return JSON.parse(localStorage.getItem(TEAM_MAP_CACHE_KEY)) || null;
+    } catch {
+      return null;
+    }
+  }
+  function saveTeamMapCache(map) {
+    try {
+      localStorage.setItem(TEAM_MAP_CACHE_KEY, JSON.stringify(map));
+    } catch {
+      /* storage unavailable or full — safe to ignore, cache just won't persist */
+    }
+  }
+  async function ensureTeamMap() {
+    if (teamMap) return teamMap;
+    const cached = loadTeamMapCache();
+    if (cached) {
+      teamMap = cached;
+      return teamMap;
+    }
+    const map = {};
+    try {
+      const data = await fetchJSON(FOTMOB_LEAGUE_URL);
+      const groups = (data.table && data.table[0] && data.table[0].data && data.table[0].data.tables) || [];
+      for (const g of groups) {
+        for (const t of (g.table && g.table.all) || []) map[t.id] = t.name;
+      }
+    } catch {
+      /* team-name lookup failing shouldn't block showing scores — falls back to "" */
+    }
+    teamMap = map;
+    saveTeamMapCache(map);
+    return teamMap;
+  }
 
   const refreshBtn = document.getElementById("refreshBtn");
   const tabTournamentBtn = document.getElementById("tabTournament");
@@ -281,7 +317,6 @@
   const metricToggle = document.getElementById("metricToggle");
   const metricGoalsBtn = document.getElementById("metricGoals");
   const metricAssistsBtn = document.getElementById("metricAssists");
-  const assistNote = document.getElementById("assistNote");
   const statusDot = document.getElementById("statusDot");
   const statusText = document.getElementById("statusText");
   const banner = document.getElementById("banner");
@@ -456,8 +491,6 @@
       ? [...pool].sort((a, b) => (b.assists || 0) - (a.assists || 0)).slice(0, 20)
       : pool.slice(0, 20);
 
-    assistNote.style.display = isAssists && scorers.length > 0 ? "block" : "none";
-
     if (scorers.length === 0) {
       listEl.innerHTML = "";
       const emptyMsg = activeTab === "alltime"
@@ -497,7 +530,7 @@
     }[c]));
   }
 
-  async function loadTopScorers({ isFirstLoad } = {}) {
+  async function loadTournamentGoals({ isFirstLoad } = {}) {
     if (inFlight) return;
     inFlight = true;
     refreshBtn.disabled = true;
@@ -505,35 +538,46 @@
     else setStatus("loading", "Refreshing…");
 
     try {
-      const data = await fetchJSON(STATS_URL);
-      const stats = Array.isArray(data.stats) ? data.stats : [];
-      const goalsLeaders = stats.find((s) => s.name === "goalsLeaders");
-      const leaders = goalsLeaders && Array.isArray(goalsLeaders.leaders)
-        ? goalsLeaders.leaders
-        : [];
+      const [teams, goalsData, assistsData] = await Promise.all([
+        ensureTeamMap(),
+        fetchJSON(FOTMOB_GOALS_URL),
+        fetchJSON(FOTMOB_ASSISTS_URL),
+      ]);
 
-      tournamentScorers = leaders
-        .map((l) => {
-          const name = l.athlete && l.athlete.displayName || "";
-          const playerStats = (l.athlete && l.athlete.statistics) || [];
-          const assistsStat = playerStats.find((st) => st.name === "goalAssists");
-          return {
-            name,
-            wikiTitle: name,
-            team: l.athlete && l.athlete.team && l.athlete.team.name || "",
-            photo: l.athlete && l.athlete.headshot && l.athlete.headshot.href || "",
-            goals: l.value,
-            assists: assistsStat ? assistsStat.value : 0,
-          };
-        })
-        .filter((s) => s.name)
-        .sort((a, b) => b.goals - a.goals)
-        // Keep a wider pool than the top 20 shown by goals — the assists
-        // view re-sorts this same pool, so it needs more than 20 candidates
-        // to be a reasonable (if still approximate) assists ranking.
-        .slice(0, 50);
+      const byId = new Map();
+      const getEntry = (p) => {
+        if (!byId.has(p.id)) {
+          byId.set(p.id, {
+            name: p.name,
+            wikiTitle: p.name,
+            team: teams[p.teamId] || "",
+            photo: "",
+            goals: 0,
+            assists: 0,
+          });
+        }
+        return byId.get(p.id);
+      };
+      for (const p of goalsData.statsData || []) {
+        getEntry(p).goals = (p.statValue && p.statValue.value) || 0;
+      }
+      for (const p of assistsData.statsData || []) {
+        getEntry(p).assists = (p.statValue && p.statValue.value) || 0;
+      }
 
-      await ensureThumbnails(tournamentScorers);
+      // Keep every player (not just a top-N slice): goals and assists are
+      // now two independently complete leaderboards, so a pure playmaker
+      // like a zero-goal assists leader must still be present once the
+      // Assists view re-sorts this same pool.
+      const allScorers = Array.from(byId.values());
+      tournamentScorers = allScorers.sort((a, b) => b.goals - a.goals);
+
+      // Only fetch photos for whichever players are actually about to be
+      // shown (top 20 by goals, union top 20 by assists) rather than the
+      // whole pool.
+      const topAssists = [...allScorers].sort((a, b) => b.assists - a.assists).slice(0, 20);
+      const photoPool = Array.from(new Set([...tournamentScorers.slice(0, 20), ...topAssists]));
+      await ensureThumbnails(photoPool);
       render();
       setStatus("live", "Live · last updated " + new Date().toLocaleTimeString());
       showBanner(null);
@@ -574,11 +618,11 @@
 
   refreshBtn.addEventListener("click", () => {
     if (activeTab === "alltime") loadAllTime();
-    else loadTopScorers({ isFirstLoad: false });
+    else loadTournamentGoals({ isFirstLoad: false });
   });
-  loadTopScorers({ isFirstLoad: true });
+  loadTournamentGoals({ isFirstLoad: true });
   setInterval(() => {
-    if (activeTab === "tournament") loadTopScorers({ isFirstLoad: false });
+    if (activeTab === "tournament") loadTournamentGoals({ isFirstLoad: false });
   }, POLL_MS);
 })();
 </script>
